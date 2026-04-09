@@ -27,7 +27,7 @@
       height: 100dvh;
       display: flex;
       flex-direction: column;
-      min-height: 1100px;
+      min-height: 900px;
     }
 
     /* ── Loading overlay ── */
@@ -197,8 +197,8 @@
     }
     .chip.all-day {
       background: transparent;
-      border: 1px solid var(--chip-allday-border);
-      color: var(--accent);
+      border: 1px solid;
+      color: #fff;
     }
     .overflow-label { font-size: 0.65rem; color: var(--text2); margin-top: 1px; }
 
@@ -238,7 +238,6 @@
       border-radius: 8px;
       padding: 10px 12px;
     }
-    .event-card.all-day { border-left-color: var(--chip-allday-border); }
     .event-card-title { font-size: 0.9rem; font-weight: 600; margin-bottom: 4px; line-height: 1.3; }
     .event-card-time { font-size: 0.75rem; color: var(--text2); }
     .event-card-loc, .event-card-desc {
@@ -249,6 +248,96 @@
       word-break: break-word;
     }
     .no-events { color: var(--text2); font-size: 0.85rem; text-align: center; padding: 24px 0; }
+
+    /* ── Calendars modal ── */
+    .cal-modal {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.55);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 15;
+    }
+    .cal-modal.hidden { display: none; }
+    .cal-modal-box {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      width: 340px;
+      max-height: 80vh;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+    }
+    .cal-modal-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--border);
+      font-weight: 600;
+      font-size: 0.95rem;
+      flex-shrink: 0;
+    }
+    .cal-modal-close {
+      background: none;
+      border: none;
+      color: var(--text2);
+      font-size: 1.2rem;
+      cursor: pointer;
+      padding: 2px 6px;
+      border-radius: 4px;
+      line-height: 1;
+    }
+    .cal-modal-close:hover { color: var(--text); }
+    .cal-modal-list {
+      overflow-y: auto;
+      padding: 6px 0;
+    }
+    .cal-modal-list::-webkit-scrollbar { width: 4px; }
+    .cal-modal-list::-webkit-scrollbar-track { background: transparent; }
+    .cal-modal-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+    .cal-item {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 16px;
+      cursor: pointer;
+      transition: background 0.1s;
+    }
+    .cal-item:hover { background: var(--surface2); }
+    .cal-swatch {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .cal-name {
+      flex: 1;
+      font-size: 0.88rem;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .cal-check {
+      width: 18px;
+      height: 18px;
+      border: 2px solid var(--border);
+      border-radius: 4px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      font-size: 0.7rem;
+      transition: background 0.1s, border-color 0.1s;
+    }
+    .cal-check.checked {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #fff;
+    }
   </style>
 </head>
 <body>
@@ -277,6 +366,7 @@
     <button class="today-btn" id="todayBtn">Today</button>
     <div class="spacer"></div>
     <span class="status-msg" id="statusMsg"></span>
+    <button class="icon-btn" id="calendarsBtn" title="Calendars">&#9776;</button>
     <button class="icon-btn" id="refreshBtn" title="Refresh">&#8635;</button>
     <button class="icon-btn" id="signoutBtn" title="Sign out">&#x2715;</button>
   </header>
@@ -292,6 +382,17 @@
       </div>
       <div class="sidebar-list" id="sidebarList"></div>
     </div>
+  </div>
+</div>
+
+<!-- Calendars picker modal -->
+<div id="cal-modal" class="cal-modal hidden">
+  <div class="cal-modal-box">
+    <div class="cal-modal-header">
+      <span>Calendars</span>
+      <button class="cal-modal-close" id="calModalClose">&times;</button>
+    </div>
+    <div class="cal-modal-list" id="calModalList"></div>
   </div>
 </div>
 
@@ -318,6 +419,8 @@ const MONTHS = ['January','February','March','April','May','June',
 let tokenClient = null;
 let accessToken = null;
 let allEvents   = [];
+let calendarList = [];      // [{id, summary, backgroundColor}]
+let disabledCalendars = new Set(); // IDs the user has toggled off; new ones default enabled
 let currentYear, currentMonth;
 let selectedDate = null;
 let refreshTimer = null;
@@ -377,14 +480,33 @@ function signOut() {
   if (accessToken) google.accounts.oauth2.revoke(accessToken, () => {});
   localStorage.removeItem('gcal_token');
   localStorage.removeItem('gcal_token_expiry');
+  localStorage.removeItem('gcal_disabled_calendars');
   accessToken = null;
   allEvents = [];
+  calendarList = [];
+  disabledCalendars = new Set();
   showSignIn();
+}
+
+// ─── Disabled-calendars persistence ──────────────────────────────────────────
+function loadDisabledCalendars() {
+  disabledCalendars = new Set(
+    JSON.parse(localStorage.getItem('gcal_disabled_calendars') || '[]')
+  );
+}
+
+function saveDisabledCalendars() {
+  localStorage.setItem('gcal_disabled_calendars', JSON.stringify([...disabledCalendars]));
+}
+
+function isCalendarEnabled(calId) {
+  return !disabledCalendars.has(calId);
 }
 
 // ─── Google Calendar API ──────────────────────────────────────────────────────
 async function fetchAndRender() {
   showOverlay('Loading calendar\u2026');
+  loadDisabledCalendars();
 
   const timeMin = new Date();
   timeMin.setFullYear(timeMin.getFullYear() - 1);
@@ -392,12 +514,23 @@ async function fetchAndRender() {
   timeMax.setFullYear(timeMax.getFullYear() + 2);
 
   try {
-    const items = await fetchAllPages(timeMin, timeMax);
-    allEvents = items.map(normalizeEvent).filter(Boolean);
+    calendarList = await fetchCalendarList();
+
+    // Fetch all calendars' events in parallel
+    const chunks = await Promise.all(
+      calendarList.map(async cal => {
+        const color = cal.backgroundColor || '#1f6feb';
+        const items = await fetchAllPages(cal.id, timeMin, timeMax);
+        return items.map(item => normalizeEvent(item, cal.id, color));
+      })
+    );
+
+    allEvents = chunks.flat().filter(Boolean);
     allEvents.sort((a, b) => a.start - b.start);
     hideOverlay();
+    const visibleCount = allEvents.filter(e => isCalendarEnabled(e.calendarId)).length;
     document.getElementById('statusMsg').textContent =
-      `${allEvents.length} events \u00b7 ${new Date().toLocaleTimeString([],{hour:'numeric',minute:'2-digit'})}`;
+      `${visibleCount} events \u00b7 ${new Date().toLocaleTimeString([],{hour:'numeric',minute:'2-digit'})}`;
     render();
   } catch (err) {
     console.error(err);
@@ -410,7 +543,21 @@ async function fetchAndRender() {
   }
 }
 
-async function fetchAllPages(timeMin, timeMax) {
+async function fetchCalendarList() {
+  const res = await fetch(
+    'https://www.googleapis.com/calendar/v3/users/me/calendarList',
+    { headers: { Authorization: `Bearer ${accessToken}` } }
+  );
+  if (!res.ok) {
+    const e = new Error(`HTTP ${res.status}`);
+    e.status = res.status;
+    throw e;
+  }
+  const data = await res.json();
+  return data.items || [];
+}
+
+async function fetchAllPages(calendarId, timeMin, timeMax) {
   let items = [];
   let pageToken = null;
   do {
@@ -424,7 +571,7 @@ async function fetchAllPages(timeMin, timeMax) {
     if (pageToken) params.set('pageToken', pageToken);
 
     const res = await fetch(
-      `https://www.googleapis.com/calendar/v3/calendars/primary/events?${params}`,
+      `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events?${params}`,
       { headers: { Authorization: `Bearer ${accessToken}` } }
     );
     if (!res.ok) {
@@ -439,7 +586,7 @@ async function fetchAllPages(timeMin, timeMax) {
   return items;
 }
 
-function normalizeEvent(item) {
+function normalizeEvent(item, calId, calColor) {
   if (item.status === 'cancelled' || !item.start) return null;
   const allDay = !!item.start.date;
   return {
@@ -449,6 +596,8 @@ function normalizeEvent(item) {
     allDay,
     location:    item.location    || null,
     description: item.description ? stripHtml(item.description) : null,
+    calendarId:  calId,
+    calendarColor: calColor,
   };
 }
 
@@ -476,6 +625,7 @@ function sameDay(a, b) {
 function getEventsForDate(date) {
   const d = new Date(date.getFullYear(), date.getMonth(), date.getDate());
   return allEvents.filter(ev => {
+    if (!isCalendarEnabled(ev.calendarId)) return false;
     if (ev.allDay) {
       // API returns end as exclusive next-day for all-day events
       return d >= ev.start && d < ev.end;
@@ -519,6 +669,12 @@ function renderGrid() {
       const chip = document.createElement('div');
       chip.className = 'chip' + (ev.allDay ? ' all-day' : '');
       chip.textContent = ev.summary;
+      if (ev.allDay) {
+        chip.style.borderColor = ev.calendarColor;
+        chip.style.color = ev.calendarColor;
+      } else {
+        chip.style.background = ev.calendarColor;
+      }
       chips.appendChild(chip);
     });
     if (evs.length > MAX) {
@@ -565,6 +721,7 @@ function renderSidebar() {
   for (const ev of sorted) {
     const card = document.createElement('div');
     card.className = 'event-card' + (ev.allDay ? ' all-day' : '');
+    card.style.borderLeftColor = ev.calendarColor;
 
     const title = document.createElement('div');
     title.className = 'event-card-title';
@@ -602,6 +759,57 @@ function render() {
   renderSidebar();
 }
 
+// ─── Calendars modal ──────────────────────────────────────────────────────────
+function openCalendarModal() {
+  const list = document.getElementById('calModalList');
+  list.innerHTML = '';
+
+  for (const cal of calendarList) {
+    const enabled = isCalendarEnabled(cal.id);
+    const color = cal.backgroundColor || '#1f6feb';
+
+    const item = document.createElement('div');
+    item.className = 'cal-item';
+
+    const swatch = document.createElement('div');
+    swatch.className = 'cal-swatch';
+    swatch.style.background = color;
+
+    const name = document.createElement('div');
+    name.className = 'cal-name';
+    name.textContent = cal.summary;
+
+    const check = document.createElement('div');
+    check.className = 'cal-check' + (enabled ? ' checked' : '');
+    check.textContent = enabled ? '\u2713' : '';
+
+    item.appendChild(swatch);
+    item.appendChild(name);
+    item.appendChild(check);
+
+    item.addEventListener('click', () => {
+      if (isCalendarEnabled(cal.id)) {
+        disabledCalendars.add(cal.id);
+        check.classList.remove('checked');
+        check.textContent = '';
+      } else {
+        disabledCalendars.delete(cal.id);
+        check.classList.add('checked');
+        check.textContent = '\u2713';
+      }
+      saveDisabledCalendars();
+      const visibleCount = allEvents.filter(e => isCalendarEnabled(e.calendarId)).length;
+      document.getElementById('statusMsg').textContent =
+        `${visibleCount} events \u00b7 ${new Date().toLocaleTimeString([],{hour:'numeric',minute:'2-digit'})}`;
+      render();
+    });
+
+    list.appendChild(item);
+  }
+
+  document.getElementById('cal-modal').classList.remove('hidden');
+}
+
 // ─── UI state ─────────────────────────────────────────────────────────────────
 function showOverlay(msg) {
   const o = document.getElementById('overlay');
@@ -625,6 +833,13 @@ function showApp() {
 document.getElementById('signin-btn').addEventListener('click', signIn);
 document.getElementById('signoutBtn').addEventListener('click', signOut);
 document.getElementById('refreshBtn').addEventListener('click', fetchAndRender);
+document.getElementById('calendarsBtn').addEventListener('click', openCalendarModal);
+document.getElementById('calModalClose').addEventListener('click', () => {
+  document.getElementById('cal-modal').classList.add('hidden');
+});
+document.getElementById('cal-modal').addEventListener('click', e => {
+  if (e.target === e.currentTarget) e.currentTarget.classList.add('hidden');
+});
 document.getElementById('prevBtn').addEventListener('click', () => {
   if (--currentMonth < 0) { currentMonth = 11; currentYear--; }
   render();
