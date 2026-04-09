@@ -116,7 +116,7 @@
       flex-shrink: 0;
     }
     .nav-btn:hover { background: var(--border); }
-    .month-label { font-size: 1.25rem; font-weight: 600; min-width: 200px; text-align: center; }
+    .month-label { font-size: 1.25rem; font-weight: 600; min-width: 280px; text-align: center; }
     .today-btn {
       background: var(--surface2);
       border: 1px solid var(--border);
@@ -157,7 +157,7 @@
     .weekday-row { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; }
     .weekday-label {
       text-align: center;
-      font-size: 0.72rem;
+      font-size: 0.82rem;
       font-weight: 600;
       color: var(--text2);
       text-transform: uppercase;
@@ -167,7 +167,7 @@
     .days-grid {
       display: grid;
       grid-template-columns: repeat(7, 1fr);
-      grid-template-rows: repeat(6, 1fr);
+      grid-template-rows: repeat(3, 1fr);
       gap: 6px;
       flex: 1;
     }
@@ -188,11 +188,11 @@
     .day-cell.other-month { opacity: 0.3; }
     .day-cell.today { border-color: var(--today-color); }
     .day-cell.selected { background: var(--surface2); border-color: var(--accent); }
-    .day-num { font-size: 0.82rem; font-weight: 600; margin-bottom: 5px; flex-shrink: 0; }
+    .day-num { font-size: 0.95rem; font-weight: 600; margin-bottom: 5px; flex-shrink: 0; }
     .day-cell.today .day-num { color: var(--today-color); }
     .chips { flex: 1; overflow: hidden; display: flex; flex-direction: column; gap: 2px; }
     .chip {
-      font-size: 0.68rem;
+      font-size: 0.78rem;
       padding: 2px 6px;
       border-radius: 4px;
       white-space: nowrap;
@@ -207,7 +207,7 @@
       border: 1px solid;
       color: #fff;
     }
-    .overflow-label { font-size: 0.65rem; color: var(--text2); margin-top: 1px; }
+    .overflow-label { font-size: 0.74rem; color: var(--text2); margin-top: 1px; }
 
     /* ── Sidebar ── */
     .sidebar {
@@ -431,9 +431,16 @@ let accessToken = null;
 let allEvents   = [];
 let calendarList = [];      // [{id, summary, backgroundColor}]
 let disabledCalendars = new Set(); // IDs the user has toggled off; new ones default enabled
-let currentYear, currentMonth;
+let windowStart = null;     // Date: the Sunday that begins the 21-day window
 let selectedDate = null;
 let refreshTimer = null;
+
+function sundayOfWeek(date) {
+  const d = new Date(date);
+  d.setDate(d.getDate() - d.getDay());
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
 
 // ─── GIS: called by the script tag's onload ────────────────────────────────────
 function onGISLoaded() {
@@ -649,22 +656,18 @@ function getEventsForDate(date) {
 function renderGrid() {
   const grid = document.getElementById('daysGrid');
   grid.innerHTML = '';
-  const today       = new Date();
-  const startOffset = new Date(currentYear, currentMonth, 1).getDay();
-  const daysInMonth = new Date(currentYear, currentMonth + 1, 0).getDate();
+  const today = new Date();
 
-  for (let i = 0; i < 42; i++) {
-    const dayNum     = i - startOffset + 1;
-    const date       = new Date(currentYear, currentMonth, dayNum);
-    const otherMonth = dayNum < 1 || dayNum > daysInMonth;
+  for (let i = 0; i < 21; i++) {
+    const date       = new Date(windowStart);
+    date.setDate(windowStart.getDate() + i);
     const isToday    = sameDay(date, today);
     const isSelected = selectedDate && sameDay(date, selectedDate);
 
     const cell = document.createElement('div');
     cell.className = 'day-cell'
-      + (otherMonth ? ' other-month' : '')
-      + (isToday    ? ' today'       : '')
-      + (isSelected ? ' selected'    : '');
+      + (isToday    ? ' today'    : '')
+      + (isSelected ? ' selected' : '');
 
     const numEl = document.createElement('div');
     numEl.className = 'day-num';
@@ -763,8 +766,19 @@ function renderSidebar() {
   }
 }
 
+function formatWindowLabel() {
+  const end = new Date(windowStart);
+  end.setDate(windowStart.getDate() + 20);
+  const opts = { month: 'short', day: 'numeric' };
+  const startStr = windowStart.toLocaleDateString([], opts);
+  if (windowStart.getFullYear() !== end.getFullYear()) {
+    return `${windowStart.toLocaleDateString([], { ...opts, year: 'numeric' })} \u2013 ${end.toLocaleDateString([], { ...opts, year: 'numeric' })}`;
+  }
+  return `${startStr} \u2013 ${end.toLocaleDateString([], opts)}, ${end.getFullYear()}`;
+}
+
 function render() {
-  document.getElementById('monthLabel').textContent = `${MONTHS[currentMonth]} ${currentYear}`;
+  document.getElementById('monthLabel').textContent = formatWindowLabel();
   renderGrid();
   renderSidebar();
 }
@@ -851,23 +865,25 @@ document.getElementById('cal-modal').addEventListener('click', e => {
   if (e.target === e.currentTarget) e.currentTarget.classList.add('hidden');
 });
 document.getElementById('prevBtn').addEventListener('click', () => {
-  if (--currentMonth < 0) { currentMonth = 11; currentYear--; }
+  windowStart.setDate(windowStart.getDate() - 7);
   render();
 });
 document.getElementById('nextBtn').addEventListener('click', () => {
-  if (++currentMonth > 11) { currentMonth = 0; currentYear++; }
+  windowStart.setDate(windowStart.getDate() + 7);
   render();
 });
 document.getElementById('todayBtn').addEventListener('click', () => {
   const t = new Date();
-  currentYear = t.getFullYear(); currentMonth = t.getMonth(); selectedDate = t;
+  windowStart = sundayOfWeek(t);
+  selectedDate = t;
   render();
 });
 
 // ─── Init ─────────────────────────────────────────────────────────────────────
 (function init() {
   const t = new Date();
-  currentYear = t.getFullYear(); currentMonth = t.getMonth(); selectedDate = t;
+  windowStart = sundayOfWeek(t);
+  selectedDate = t;
 
   for (const d of DAYS) {
     const el = document.createElement('div');
